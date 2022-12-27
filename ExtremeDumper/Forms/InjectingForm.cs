@@ -1,130 +1,130 @@
 using System;
 using System.IO;
-using System.Resources;
 using System.Threading;
 using System.Windows.Forms;
 using dnlib.DotNet;
-using NativeSharp;
+using ExtremeDumper.Diagnostics;
+using ExtremeDumper.Injecting;
+using ExtremeDumper.Logging;
 
-namespace ExtremeDumper.Forms {
-	internal partial class InjectingForm : Form {
-		private readonly NativeProcess _process;
-		private string _assemblyPath;
-		private ModuleDef _manifestModule;
-		private MethodDef _entryPoint;
-		private string _argument;
-		private readonly ResourceManager _resources = new ResourceManager(typeof(InjectingForm));
+namespace ExtremeDumper.Forms;
 
-		public InjectingForm(uint processId) {
-			InitializeComponent();
-			_process = NativeProcess.Open(processId);
-			if (_process == NativeProcess.InvalidProcess)
-				throw new InvalidOperationException();
-			Text = $"Injector - {_process.Name}(ID={_process.Id.ToString()})";
-		}
+partial class InjectingForm : Form {
+	readonly ProcessInfo process;
+	string assemblyPath = string.Empty;
+	ModuleDef? module;
+	MethodDef? entryPoint;
+	string argument = string.Empty;
 
-		#region Events
-		private void InjectingForm_DragEnter(object sender, DragEventArgs e) {
-			e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
-		}
+	public InjectingForm(ProcessInfo process) {
+		this.process = process;
+		InitializeComponent();
+		Text = TitleComposer.Compose(true, "Injector", process.Name, null, $"ID={process.Id}");
+		cmbCLRVersion.SelectedIndex = 0;
+	}
 
-		private void InjectingForm_DragDrop(object sender, DragEventArgs e) {
-			tbAssemblyPath.Text = ((string[])e.Data.GetData(DataFormats.FileDrop))[0];
-			LoadAssembly();
-		}
+	#region Events
+	void InjectingForm_DragEnter(object sender, DragEventArgs e) {
+		e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+	}
 
-		private void tbAssemblyPath_TextChanged(object sender, EventArgs e) {
-			_assemblyPath = tbAssemblyPath.Text;
-		}
+	void InjectingForm_DragDrop(object sender, DragEventArgs e) {
+		tbAssemblyPath.Text = ((string[])e.Data.GetData(DataFormats.FileDrop))[0];
+		LoadAssembly();
+	}
 
-		private void btSelectAssembly_Click(object sender, EventArgs e) {
-			if (odlgSelectAssembly.ShowDialog() == DialogResult.OK)
-				tbAssemblyPath.Text = odlgSelectAssembly.FileName;
-			else
-				return;
-			LoadAssembly();
-		}
+	void tbAssemblyPath_TextChanged(object sender, EventArgs e) {
+		assemblyPath = tbAssemblyPath.Text;
+	}
 
-		private void cmbEntryPoint_SelectedIndexChanged(object sender, EventArgs e) {
-			_entryPoint = (MethodDef)cmbEntryPoint.SelectedItem;
-		}
+	void btSelectAssembly_Click(object sender, EventArgs e) {
+		if (odlgSelectAssembly.ShowDialog() == DialogResult.OK)
+			tbAssemblyPath.Text = odlgSelectAssembly.FileName;
+		else
+			return;
+		LoadAssembly();
+	}
 
-		private void tbArgument_TextChanged(object sender, EventArgs e) {
-			_argument = tbArgument.Text;
-		}
+	void cmbEntryPoint_SelectedIndexChanged(object sender, EventArgs e) {
+		entryPoint = (MethodDef)cmbEntryPoint.SelectedItem;
+	}
 
-		private void btInject_Click(object sender, EventArgs e) {
-			string typeName;
+	void tbArgument_TextChanged(object sender, EventArgs e) {
+		argument = tbArgument.Text;
+	}
 
-			if (!File.Exists(_assemblyPath))
-				return;
-			if (cmbEntryPoint.SelectedItem is null)
-				return;
-			typeName = _entryPoint.FullName.Substring(_entryPoint.FullName.IndexOf(' ') + 1);
-			typeName = typeName.Substring(0, typeName.IndexOf(':'));
-			if (chkWaitReturn.Checked) {
-				btInject.Enabled = false;
-				Text += _resources.GetString("StrWaiting");
-				new Thread(() => {
-					int ret;
+	void btInject_Click(object sender, EventArgs e) {
+		if (!File.Exists(assemblyPath))
+			return;
+		if (entryPoint is null)
+			return;
 
-					if (_process.InjectManaged(_assemblyPath, typeName, _entryPoint.Name, _argument, out ret))
-						Invoke((Action)(() => MessageBoxStub.Show($"{_resources.GetString("StrInjectSuccessfully")}\n{_resources.GetString("StrReturnValue")} {ret.ToString()}", MessageBoxIcon.Information)));
-					else
-						Invoke((Action)(() => MessageBoxStub.Show(_resources.GetString("StrFailToInject"), MessageBoxIcon.Error)));
-					Invoke((Action)(() => {
-						btInject.Enabled = true;
-						Text = Text.Substring(0, Text.Length - 6);
-					}));
-				}) {
-					IsBackground = true
-				}.Start();
-			}
-			else {
-				if (_process.InjectManaged(_assemblyPath, typeName, _entryPoint.Name, _argument))
-					MessageBoxStub.Show(_resources.GetString("StrInjectSuccessfully"), MessageBoxIcon.Information);
+		string typeName = entryPoint.FullName.Substring(entryPoint.FullName.IndexOf(' ') + 1);
+		typeName = typeName.Substring(0, typeName.IndexOf(':'));
+		var clrVersion = cmbCLRVersion.SelectedItem switch {
+			"CLR 2.x" => InjectionClrVersion.V2,
+			"CLR 4.x" => InjectionClrVersion.V4,
+			_ => throw new NotSupportedException()
+		};
+		if (chkWaitReturn.Checked) {
+			btInject.Enabled = false;
+			Text += "Waiting...";
+			new Thread(() => {
+				if (Injector.InjectManagedAndWait(process.Id, assemblyPath, typeName, entryPoint.Name, argument, clrVersion, out int ret))
+					Logger.Info($"Inject successfully and return value is {Formatter.FormatHex(ret)}");
 				else
-					MessageBoxStub.Show(_resources.GetString("StrFailToInject"), MessageBoxIcon.Error);
+					Logger.Error("Failed to inject");
+				Invoke(() => {
+					btInject.Enabled = true;
+					Text = Text.Substring(0, Text.Length - 6);
+				});
+			}) { IsBackground = true }.Start();
+		}
+		else {
+			if (Injector.InjectManaged(process.Id, assemblyPath, typeName, entryPoint.Name, argument, clrVersion))
+				Logger.Info("Inject successfully");
+			else
+				Logger.Error("Failed to inject");
+		}
+	}
+	#endregion
+
+	void LoadAssembly() {
+		try {
+			module = ModuleDefMD.Load(File.ReadAllBytes(assemblyPath));
+		}
+		catch {
+			Logger.Error("Invalid assembly");
+			module = null;
+			return;
+		}
+		cmbEntryPoint.Items.Clear();
+		foreach (var type in module.GetTypes()) {
+			foreach (var method in type.Methods) {
+				if (!method.IsStatic)
+					continue;
+				if (method.IsGetter || method.IsSetter)
+					continue;
+
+				var methodSig = (MethodSig)method.Signature;
+				if (methodSig.Params.Count != 1 || methodSig.Params[0].FullName != "System.String")
+					continue;
+				if (methodSig.RetType.FullName != "System.Int32")
+					continue;
+
+				cmbEntryPoint.Items.Add(method);
 			}
 		}
-		#endregion
+		if (cmbEntryPoint.Items.Count == 1)
+			cmbEntryPoint.SelectedIndex = 0;
+		cmbCLRVersion.SelectedIndex = module.CorLibTypes.AssemblyRef.Version.Major == 4 ? 1 : 0;
+	}
 
-		private void LoadAssembly() {
-			MethodSig methodSig;
-
-			try {
-				_manifestModule = ModuleDefMD.Load(_assemblyPath);
-			}
-			catch {
-				MessageBoxStub.Show(_resources.GetString("StrInvalidAssembly"), MessageBoxIcon.Error);
-				_manifestModule = null;
-				return;
-			}
-			cmbEntryPoint.Items.Clear();
-			foreach (TypeDef typeDef in _manifestModule.GetTypes())
-				foreach (MethodDef methodDef in typeDef.Methods) {
-					if (!methodDef.IsStatic)
-						continue;
-					if (methodDef.IsGetter || methodDef.IsSetter)
-						continue;
-					methodSig = (MethodSig)methodDef.Signature;
-					if (methodSig.Params.Count != 1 || methodSig.Params[0].FullName != "System.String")
-						continue;
-					if (methodSig.RetType.FullName != "System.Int32")
-						continue;
-					cmbEntryPoint.Items.Add(methodDef);
-				}
-			if (cmbEntryPoint.Items.Count == 1)
-				cmbEntryPoint.SelectedIndex = 0;
+	protected override void Dispose(bool disposing) {
+		if (disposing) {
+			components?.Dispose();
+			module?.Dispose();
 		}
-
-		protected override void Dispose(bool disposing) {
-			if (disposing) {
-				components?.Dispose();
-				_manifestModule?.Dispose();
-				_process.Dispose();
-			}
-			base.Dispose(disposing);
-		}
+		base.Dispose(disposing);
 	}
 }

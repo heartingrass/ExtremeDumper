@@ -1,203 +1,297 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Resources;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
-using ExtremeDumper.Dumper;
-using Microsoft.Diagnostics.Runtime;
-using NativeSharp;
-using static ExtremeDumper.Forms.NativeMethods;
+using ExtremeDumper.Diagnostics;
+using ExtremeDumper.Dumping;
+using ExtremeDumper.Logging;
 using ImageLayout = dnlib.PE.ImageLayout;
 
-namespace ExtremeDumper.Forms {
-	internal unsafe partial class ModulesForm : Form {
-		private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
-		private readonly NativeProcess _process;
-		private readonly bool _isDotNetProcess;
-		private readonly DumperTypeWrapper _dumperType;
-		private readonly ResourceManager _resources = new ResourceManager(typeof(ModulesForm));
+namespace ExtremeDumper.Forms;
 
-		public ModulesForm(uint processId, string processName, bool isDotNetProcess, DumperTypeWrapper dumperType) {
-			InitializeComponent();
-			_process = NativeProcess.Open(processId);
-			if (_process == NativeProcess.InvalidProcess)
-				throw new InvalidOperationException();
-			_isDotNetProcess = isDotNetProcess;
-			_dumperType = dumperType;
-			Text = $"{_resources.GetString("StrModules")} {processName}(ID={processId.ToString()})";
-			typeof(ListView).InvokeMember("DoubleBuffered", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.SetProperty, null, lvwModules, new object[] { true });
-			lvwModules.ListViewItemSorter = new ListViewItemSorter(lvwModules, new List<TypeCode> {
-				TypeCode.String,
-				TypeCode.String,
-				TypeCode.String,
-				TypeCode.UInt64,
-				TypeCode.Int32,
-				TypeCode.String
-			}) {
-				AllowHexLeading = true
-			};
-			RefreshModuleList();
-		}
+partial class ModulesForm : Form {
+	static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
 
-		#region Events
-		private void lvwModules_Resize(object sender, EventArgs e) {
-			lvwModules.AutoResizeColumns(true);
-		}
+	readonly ProcessInfo process;
+	readonly StrongBox<DumperType> dumperType;
+	readonly TitleComposer title;
+	readonly List<ModuleInfo> modules = new();
 
-		private void mnuDumpModule_Click(object sender, EventArgs e) {
-			if (lvwModules.SelectedIndices.Count == 0)
-				return;
+	public ModulesForm(ProcessInfo process, StrongBox<DumperType> dumperType) {
+		InitializeComponent();
+		Utils.ScaleByDpi(this);
+		this.process = process;
+		this.dumperType = dumperType;
+		title = new TitleComposer {
+			Title = "Modules",
+			Subtitle = process.Name
+		};
+		title.Annotations["PID"] = $"PID={process.Id}";
+		Text = title.Compose(true);
+		Utils.EnableDoubleBuffer(lvwModules);
+		lvwModules.ListViewItemSorter = new ListViewItemSorter(lvwModules, new[] { TypeCode.String, TypeCode.String, TypeCode.String, TypeCode.UInt64, TypeCode.Int32, TypeCode.String }) { AllowHexLeading = true };
+		RefreshModuleList();
+	}
 
-			string filePath;
-			string directoryPath;
-			IntPtr moduleHandle;
+	#region Events
+	void lvwModules_Resize(object sender, EventArgs e) {
+		lvwModules.AutoResizeColumns(true);
+	}
 
-			filePath = PathInsertPostfix(EnsureValidFileName(lvwModules.GetFirstSelectedSubItem(chModuleName.Index).Text), ".dump");
-			if (filePath.EndsWith(".dump", StringComparison.Ordinal))
-				filePath += ".dll";
+	async void mnuDumpModule_Click(object sender, EventArgs e) {
+		if (!TryGetSelectedModule(out var module))
+			return;
+
+		try {
+			mnuDumpModule.Enabled = false;
+			title.Annotations["DUMP"] = "Dumping";
+			Text = title.Compose(true);
+
+			string filePath = EnsureValidFileName(module.Name);
+			if (filePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || filePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+				filePath = PathInsertPostfix(filePath, ".dump");
+			else
+				filePath += ".dump.dll";
 			sfdlgDumped.FileName = filePath;
-			directoryPath = lvwModules.GetFirstSelectedSubItem(chModulePath.Index).Text;
-			if (directoryPath != "InMemory" && Directory.Exists(directoryPath))
-				sfdlgDumped.InitialDirectory = directoryPath;
+			sfdlgDumped.InitialDirectory = Path.GetDirectoryName(process.FilePath);
 			if (sfdlgDumped.ShowDialog() != DialogResult.OK)
 				return;
-			moduleHandle = (IntPtr)ulong.Parse(lvwModules.GetFirstSelectedSubItem(chModuleHandle.Index).Text.Substring(2), NumberStyles.HexNumber, null);
-			DumpModule(moduleHandle, directoryPath == "InMemory" ? ImageLayout.File : ImageLayout.Memory, sfdlgDumped.FileName);
+
+			var imageLayout = module is DotNetModuleInfo dnModule && dnModule.InMemory ? ImageLayout.File : ImageLayout.Memory;
+			bool result = await Task.Run(() => DumpModule(module.ImageBase, imageLayout, sfdlgDumped.FileName));
+			if (result)
+				Logger.Info($"Dump module successfully. Image was saved to: {sfdlgDumped.FileName}");
+			else
+				Logger.Error("Fail to dump module.");
+		}
+		catch (Exception ex) {
+			Logger.Error("Exception occurred while dumping module");
+			Logger.Exception(ex);
+		}
+		finally {
+			title.Annotations["DUMP"] = null;
+			Text = title.Compose(true);
+			mnuDumpModule.Enabled = true;
+		}
+	}
+
+	async void mnuRefreshModuleList_Click(object sender, EventArgs e) {
+		try {
+			mnuRefreshModuleList.Enabled = false;
+			mnuOnlyDotNetModule.Enabled = false;
+			title.Annotations["REFRESH"] = "Refreshing";
+			Text = title.Compose(true);
+			if (mnuEnableAntiAntiDump.Checked)
+				await RefreshModuleListAAD();
+			else
+				RefreshModuleList();
+		}
+		finally {
+			title.Annotations["REFRESH"] = null;
+			Text = title.Compose(true);
+			mnuRefreshModuleList.Enabled = true;
+			mnuOnlyDotNetModule.Enabled = true;
+		}
+	}
+
+	void mnuViewFunctions_Click(object sender, EventArgs e) {
+		if (!TryGetSelectedModule(out var module))
+			return;
+
+		new FunctionsForm(process.Id, module.ImageBase).Show();
+	}
+
+	void mnuOnlyDotNetModule_Click(object sender, EventArgs e) {
+		mnuRefreshModuleList_Click(sender, e);
+	}
+
+	void mnuGotoLocation_Click(object sender, EventArgs e) {
+		if (!TryGetSelectedModule(out var module))
+			return;
+
+		if (module.FilePath != "InMemory")
+			Process.Start("explorer.exe", $"/select,{module.FilePath}");
+	}
+
+	async void mnuEnableAntiAntiDump_Click(object sender, EventArgs e) {
+		if (mnuEnableAntiAntiDump.Checked == true) {
+			mnuEnableAntiAntiDump.Checked = false;
+			title.Annotations["ENABLE_AAD"] = null;
+			mnuRefreshModuleList_Click(sender, e);
+			return;
 		}
 
-		private void mnuRefreshModuleList_Click(object sender, EventArgs e) {
-			RefreshModuleList();
+		try {
+			mnuEnableAntiAntiDump.Enabled = false;
+			title.Annotations["ENABLE_AAD"] = "Enabling AntiAntiDump";
+			Text = title.Compose(true);
+
+			await Task.Run(() => AntiAntiDump.AADExtensions.EnumerateAADClients(process.Id));
+			mnuEnableAntiAntiDump.Checked = true;
 		}
-
-		private void mnuViewFunctions_Click(object sender, EventArgs e) {
-			if (lvwModules.SelectedIndices.Count == 0)
-				return;
-
-			FunctionsForm functionsForm;
-
-#pragma warning disable IDE0067
-			functionsForm = new FunctionsForm(_process.UnsafeGetModule((void*)ulong.Parse(lvwModules.GetFirstSelectedSubItem(chModuleHandle.Index).Text.Substring(2), NumberStyles.HexNumber, null)));
-#pragma warning restore IDE0067
-			functionsForm.Show();
+		finally {
+			title.Annotations["ENABLE_AAD"] = "AntiAntiDump";
+			Text = title.Compose(true);
+			mnuEnableAntiAntiDump.Enabled = true;
 		}
+		mnuRefreshModuleList_Click(sender, e);
+	}
+	#endregion
 
-		private void mnuOnlyDotNetModule_Click(object sender, EventArgs e) {
-			RefreshModuleList();
+	bool TryGetSelectedModule([NotNullWhen(true)] out ModuleInfo? module) {
+		module = null;
+		if (lvwModules.SelectedIndices.Count == 0)
+			return false;
+
+		nuint moduleHandle = (nuint)ulong.Parse(lvwModules.GetFirstSelectedSubItem(chModuleHandle.Index).Text.Substring(2), NumberStyles.HexNumber);
+		var domainName = lvwModules.GetFirstSelectedSubItem(chDomainName.Index).Text;
+		if (string.IsNullOrEmpty(domainName))
+			domainName = null;
+		module = modules.Find(t => t.ImageBase == moduleHandle && (t as DotNetModuleInfo)?.DomainName == domainName);
+		Debug2.Assert(module is not null);
+		return true;
+	}
+
+	void RefreshModuleList() {
+		Utils.RefreshListView(lvwModules, GetAllModules(), t => CreateListViewItem(t), -1);
+	}
+
+	ModuleInfo[] GetAllModules() {
+		var modules = GetModules();
+		var dnModules = GetDotNetModules().Where(t => !IsAntiAntiDumpModule(t)).ToArray();
+		var allModules = dnModules.Concat(modules.Where(x => !dnModules.Any(y => x.ImageBase == y.ImageBase))).ToArray();
+		this.modules.Clear();
+		this.modules.AddRange(allModules);
+		return allModules;
+	}
+
+	ModuleInfo[] GetModules() {
+		if (mnuOnlyDotNetModule.Checked)
+			return Array2.Empty<ModuleInfo>();
+
+		return ModulesProviderFactory.Create(process.Id, ModulesProviderType.Unmanaged).EnumerateModules().ToArray();
+	}
+
+	ModuleInfo[] GetDotNetModules() {
+		if (process is not DotNetProcessInfo)
+			return Array2.Empty<ModuleInfo>();
+
+		try {
+			return ModulesProviderFactory.Create(process.Id, ModulesProviderType.Managed).EnumerateModules().ToArray();
 		}
-
-		private void mnuGotoLocation_Click(object sender, EventArgs e) {
-			if (lvwModules.SelectedIndices.Count == 0)
-				return;
-
-			string filePath;
-
-			filePath = lvwModules.GetFirstSelectedSubItem(chModulePath.Index).Text;
-			if (filePath != "InMemory")
-				Process.Start("explorer.exe", @"/select, " + filePath);
+		catch (Exception ex) {
+			Logger.Error("Fail to get .NET modules");
+			Logger.Exception(ex);
+			return Array2.Empty<ModuleInfo>();
 		}
-		#endregion
+	}
 
-		private void RefreshModuleList() {
-			IntPtr snapshotHandle;
-			MODULEENTRY32 moduleEntry32;
-			ListViewItem listViewItem;
-			DataTarget dataTarget;
+	async Task RefreshModuleListAAD() {
+		await Utils.RefreshListViewAsync(lvwModules, GetModulesAAD(), t => CreateListViewItem(t), -1);
+	}
 
-			lvwModules.Items.Clear();
-			if (!mnuOnlyDotNetModule.Checked) {
-				moduleEntry32 = MODULEENTRY32.Default;
-				snapshotHandle = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, _process.Id);
-				if (snapshotHandle == INVALID_HANDLE_VALUE)
-					return;
-				if (!Module32First(snapshotHandle, ref moduleEntry32))
-					return;
-				do {
-					listViewItem = new ListViewItem(moduleEntry32.szModule);
-					// Name
-					listViewItem.SubItems.Add(string.Empty);
-					// Domain Name
-					listViewItem.SubItems.Add(string.Empty);
-					// CLR Version
-					listViewItem.SubItems.Add("0x" + moduleEntry32.modBaseAddr.ToString(Cache.Is64BitProcess ? "X16" : "X8"));
-					// BaseAddress
-					listViewItem.SubItems.Add("0x" + moduleEntry32.modBaseSize.ToString("X8"));
-					// Size
-					listViewItem.SubItems.Add(moduleEntry32.szExePath);
-					// Path
-					lvwModules.Items.Add(listViewItem);
-				} while (Module32Next(snapshotHandle, ref moduleEntry32));
-			}
-			if (_isDotNetProcess)
-				try {
-					using (dataTarget = DataTarget.AttachToProcess((int)_process.Id, 10000, AttachFlag.Passive))
-						foreach (ClrInfo clrInfo in dataTarget.ClrVersions)
-							foreach (ClrAppDomain clrAppDomain in clrInfo.CreateRuntime().AppDomains)
-								foreach (ClrModule clrModule in clrAppDomain.Modules) {
-									try {
-										string moduleName;
-
-										moduleName = clrModule.Name ?? "EmptyName";
-										moduleName = clrModule.IsDynamic ? moduleName.Split(',')[0] : Path.GetFileName(moduleName);
-										listViewItem = new ListViewItem(moduleName);
-										// Name
-										listViewItem.SubItems.Add(clrAppDomain.Name);
-										// Domain Name
-										listViewItem.SubItems.Add(clrInfo.Version.ToString());
-										// CLR Version
-										listViewItem.SubItems.Add("0x" + clrModule.ImageBase.ToString(Cache.Is64BitProcess ? "X16" : "X8"));
-										// BaseAddress
-										listViewItem.SubItems.Add("0x" + clrModule.Size.ToString("X8"));
-										// Size
-										listViewItem.SubItems.Add(clrModule.IsDynamic ? "InMemory" : clrModule.FileName);
-										// Path
-										listViewItem.BackColor = Cache.DotNetColor;
-										lvwModules.Items.Add(listViewItem);
-									}
-									catch {
-									}
-								}
-				}
-				catch {
-				}
-			lvwModules.AutoResizeColumns(false);
+	IEnumerable<ModuleInfo> GetModulesAAD() {
+		modules.Clear();
+		var dnModules = new List<ModuleInfo>();
+		foreach (var module in ModulesProviderFactory.Create(process.Id, ModulesProviderType.ManagedAAD).EnumerateModules()) {
+			if (IsAntiAntiDumpModule(module))
+				continue;
+			dnModules.Add(module);
+			yield return module;
 		}
+		modules.AddRange(dnModules);
+		var umModules = GetModules().Where(x => !dnModules.Any(y => x.ImageBase == y.ImageBase)).ToArray();
+		foreach (var module in umModules)
+			yield return module;
+		modules.AddRange(modules);
+	}
 
-		private static string EnsureValidFileName(string fileName) {
-			if (string.IsNullOrEmpty(fileName))
-				return string.Empty;
-
-			StringBuilder newFileName;
-
-			newFileName = new StringBuilder(fileName.Length);
-			foreach (char chr in fileName)
-				if (!InvalidFileNameChars.Contains(chr))
-					newFileName.Append(chr);
-			return newFileName.ToString();
+	static ListViewItem CreateListViewItem(ModuleInfo module) {
+		var listViewItem = new ListViewItem(string.IsNullOrEmpty(module.Name) ? "<<EmptyName>>" : module.Name);
+		// Name
+		if (module is DotNetModuleInfo dnModule) {
+			listViewItem.SubItems.Add(dnModule.DomainName);
+			// Domain Name
+			listViewItem.SubItems.Add(dnModule.CLRVersion);
+			// CLR Version
+			listViewItem.BackColor = Utils.DotNetColor;
 		}
-
-		private void DumpModule(IntPtr moduleHandle, ImageLayout imageLayout, string filePath) {
-			bool result;
-
-			using (IDumper dumper = DumperFactory.GetDumper(_process.Id, _dumperType.Value))
-				result = dumper.DumpModule(moduleHandle, imageLayout, filePath);
-			MessageBoxStub.Show(result ? $"{_resources.GetString("StrDumpModuleSuccessfully")}{Environment.NewLine}{filePath}" : _resources.GetString("StrFailToDumpModule"), result ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+		else {
+			listViewItem.SubItems.Add(string.Empty);
+			// Domain Name
+			listViewItem.SubItems.Add(string.Empty);
+			// CLR Version
 		}
+		listViewItem.SubItems.Add(Formatter.FormatHex(module.ImageBase));
+		// Address
+		listViewItem.SubItems.Add(Formatter.FormatHex(module.ImageSize));
+		// Size
+		listViewItem.SubItems.Add(string.IsNullOrEmpty(module.FilePath) ? "InMemory" : module.FilePath);
+		// Path
+		return listViewItem;
+	}
 
-		private static string PathInsertPostfix(string path, string postfix) {
-			return Path.Combine(Path.GetDirectoryName(path), Path.GetFileNameWithoutExtension(path) + postfix + Path.GetExtension(path));
+	static string EnsureValidFileName(string fileName) {
+		if (string.IsNullOrEmpty(fileName))
+			return string.Empty;
+
+		var newFileName = new StringBuilder(fileName.Length);
+		foreach (char chr in fileName) {
+			if (!InvalidFileNameChars.Contains(chr))
+				newFileName.Append(chr);
 		}
+		return newFileName.ToString();
+	}
 
-		protected override void Dispose(bool disposing) {
-			if (disposing) {
-				components?.Dispose();
-				_process.Dispose();
-			}
-			base.Dispose(disposing);
+	bool DumpModule(nuint moduleHandle, ImageLayout imageLayout, string filePath) {
+		using var dumper = DumperFactory.Create(process.Id, GetDumperType());
+		return dumper.DumpModule(moduleHandle, imageLayout, filePath);
+	}
+
+	DumperType GetDumperType() {
+		if (mnuEnableAntiAntiDump.Checked)
+			return DumperType.AntiAntiDump;
+		return dumperType.Value;
+	}
+
+	static string PathInsertPostfix(string path, string postfix) {
+		return Path.Combine(Path.GetDirectoryName(path), Path.GetFileNameWithoutExtension(path) + postfix + Path.GetExtension(path));
+	}
+
+	static bool IsAntiAntiDumpModule(ModuleInfo module) {
+		if (string.IsNullOrEmpty(module.Name))
+			return false;
+		switch (Path.GetFileNameWithoutExtension(module.Name)) {
+		case "00000000":
+		case "00000001":
+		case "00000002":
+		case "00000003":
+		case "00000004":
+		case "00000100":
+		case "00000101":
+		case "00000102":
+		case "00000103":
+		case "00000104":
+		case "00000200":
+		case "00000201":
+		case "00000202":
+		case "00000203":
+		case "00000204":
+		case "00000300":
+		case "00000301":
+		case "00000302":
+		case "00000303":
+		case "00000304":
+			return true;
+		default:
+			return module.Name == AntiAntiDump.AADCoreInjector.GetAADCoreModuleNameIfLoaded();
 		}
 	}
 }

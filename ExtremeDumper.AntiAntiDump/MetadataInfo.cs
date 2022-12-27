@@ -1,134 +1,267 @@
 using System;
-using System.Runtime.InteropServices;
-using MetadataLocator;
-using InternalDotNetPEInfo = MetadataLocator.DotNetPEInfo;
-using InternalMetadataInfo = MetadataLocator.MetadataInfo;
-using InternalMetadataStreamInfo = MetadataLocator.MetadataStreamInfo;
+using System.IO;
 
-namespace ExtremeDumper.AntiAntiDump {
+namespace ExtremeDumper.AntiAntiDump;
+
+/// <summary>
+/// Metadata schema
+/// </summary>
+public sealed class MetadataSchema : ISerializable {
 	/// <summary>
-	/// Metadata stream info
+	/// Determine if current instance is invalid
 	/// </summary>
-	[Serializable]
-	public sealed class MetadataStreamInfo {
-		/// <summary />
-		public uint Rva;
+	public bool IsInvalid => ValidMask == 0;
 
-		/// <summary />
-		public uint Length;
+	/// <summary/>
+	public uint Reserved1;
 
-		/// <summary />
-		public MetadataStreamInfo() {
-		}
+	/// <summary/>
+	public byte MajorVersion;
 
-		internal unsafe MetadataStreamInfo(InternalMetadataStreamInfo streamInfo, IntPtr moduleHandle) {
-			Rva = (uint)((byte*)streamInfo.Address - (byte*)moduleHandle);
-			Length = streamInfo.Length;
-		}
+	/// <summary/>
+	public byte MinorVersion;
+
+	/// <summary/>
+	public byte Flags;
+
+	/// <summary/>
+	public byte Log2Rid;
+
+	/// <summary/>
+	public ulong ValidMask;
+
+	/// <summary/>
+	public ulong SortedMask;
+
+	/// <summary/>
+	/// <remarks>Array length always equals to <see cref="MetadataLocator.RuntimeDefinitions.TBL_COUNT"/> if not empty</remarks>
+	public uint[] RowCounts = Array2.Empty<uint>();
+
+	/// <summary/>
+	public uint ExtraData;
+
+	/// <summary>
+	/// Default constructor
+	/// </summary>
+	public MetadataSchema() {
 	}
 
 	/// <summary>
-	/// .NET PE Info
+	/// Populate data from <see cref="MetadataLocator.MetadataSchema"/>
 	/// </summary>
-	[Serializable]
-	public sealed class DotNetPEInfo {
-		/// <summary>
-		/// Determine if current instance is valid
-		/// </summary>
-		public bool IsValid;
+	/// <param name="schema"></param>
+	/// <exception cref="ArgumentNullException"></exception>
+	public MetadataSchema(MetadataLocator.MetadataSchema schema) {
+		if (schema is null)
+			throw new ArgumentNullException(nameof(schema));
 
-		/// <summary>
-		/// ImageLayout
-		/// </summary>
-		public ImageLayout ImageLayout;
+		Reserved1 = schema.Reserved1;
+		MajorVersion = schema.MajorVersion;
+		MinorVersion = schema.MinorVersion;
+		Flags = schema.Flags;
+		Log2Rid = schema.Log2Rid;
+		ValidMask = schema.ValidMask;
+		SortedMask = schema.SortedMask;
+		RowCounts = schema.RowCounts;
+		ExtraData = schema.ExtraData;
+	}
 
-		/// <summary>
-		/// Rva of COR20_HEADER
-		/// NOTICE: It is calculated by (pCor20Header - methodHandle). So you can't direct use it to fill the field ".NET Metadata Directory Rva"
-		/// </summary>
-		public uint Cor20HeaderRva;
+	bool ISerializable.Serialize(Stream destination) {
+		return SimpleSerializer.Write(destination, this);
+	}
 
-		/// <summary>
-		/// Rva of metadata
-		/// NOTICE: It is calculated by (pMetadata - methodHandle). So you can't direct use it to fill the field "Metadata Rva"
-		/// </summary>
-		public uint MetadataRva;
+	bool ISerializable.Deserialize(Stream source) {
+		return SimpleSerializer.Read(source, this);
+	}
+}
 
-		/// <summary>
-		/// Size of metadata
-		/// </summary>
-		public uint MetadataSize;
+/// <summary>
+/// Metadata stream info
+/// </summary>
+public abstract class MetadataStreamInfo : ISerializable {
+	/// <summary>
+	/// Determine if current instance is invalid
+	/// </summary>
+	public bool IsInvalid => Address == 0;
 
-		/// <summary />
-		public DotNetPEInfo() {
-		}
+	/// <summary>
+	/// Address of stream
+	/// </summary>
+	public ulong Address;
 
-		internal unsafe DotNetPEInfo(InternalDotNetPEInfo peInfo, IntPtr moduleHandle) {
-			IsValid = peInfo.IsValid;
-			ImageLayout = peInfo.ImageLayout;
-			Cor20HeaderRva = (uint)((byte*)peInfo.Cor20HeaderAddress - (byte*)moduleHandle);
-			MetadataRva = (uint)((byte*)peInfo.MetadataAddress - (byte*)moduleHandle);
-			MetadataSize = peInfo.MetadataSize;
-		}
+	/// <summary>
+	/// Length of stream
+	/// </summary>
+	public uint Length;
+
+	/// <summary>
+	/// Default constructor
+	/// </summary>
+	protected MetadataStreamInfo() {
 	}
 
 	/// <summary>
-	/// Metadata info
+	/// Populate data from <see cref="MetadataLocator.MetadataStreamInfo"/>
 	/// </summary>
-	[Serializable]
-	public sealed class MetadataInfo {
-		/// <summary>
-		/// #~ or #- info
-		/// </summary>
-		public MetadataStreamInfo TableStream;
+	/// <param name="stream"></param>
+	/// <exception cref="ArgumentNullException"></exception>
+	protected MetadataStreamInfo(MetadataLocator.MetadataStreamInfo stream) {
+		if (stream is null)
+			throw new ArgumentNullException(nameof(stream));
 
-		/// <summary>
-		/// #Strings heap info
-		/// </summary>
-		public MetadataStreamInfo StringHeap;
+		Address = stream.Address;
+		Length = stream.Length;
+	}
 
-		/// <summary>
-		/// #US heap info
-		/// </summary>
-		public MetadataStreamInfo UserStringHeap;
+	bool ISerializable.Serialize(Stream destination) {
+		return SimpleSerializer.Write(destination, this);
+	}
 
-		/// <summary>
-		/// #GUID heap info
-		/// </summary>
-		public MetadataStreamInfo GuidHeap;
+	bool ISerializable.Deserialize(Stream source) {
+		return SimpleSerializer.Read(source, this);
+	}
+}
 
-		/// <summary>
-		/// #Blob heap info
-		/// </summary>
-		public MetadataStreamInfo BlobHeap;
+/// <summary>
+/// Metadata table info (#~, #-)
+/// </summary>
+public sealed class MetadataTableInfo : MetadataStreamInfo {
+	/// <summary>
+	/// Is compressed table stream (#~)
+	/// </summary>
+	public bool IsCompressed;
 
-		/// <summary>
-		/// .NET PE Info (invalid if PEInfo.IsNativeImage is true)
-		/// </summary>
-		public DotNetPEInfo PEInfo;
+	/// <summary>
+	/// Table count, see <see cref="MetadataLocator.RuntimeDefinitions.TBL_COUNT_V1"/> and  <see cref="MetadataLocator.RuntimeDefinitions.TBL_COUNT_V2"/>
+	/// </summary>
+	public uint TableCount;
 
-		/// <summary />
-		public MetadataInfo() {
-		}
+	/// <summary>
+	/// Size of each row
+	/// </summary>
+	/// <remarks>Array length always equals to <see cref="MetadataLocator.RuntimeDefinitions.TBL_COUNT"/> if not empty</remarks>
+	public uint[] RowSizes = Array2.Empty<uint>();
 
-		internal MetadataInfo(InternalMetadataInfo metadataInfo) {
-			if (metadataInfo is null)
-				throw new ArgumentNullException(nameof(metadataInfo));
+	/// <summary>
+	/// Default constructor
+	/// </summary>
+	public MetadataTableInfo() {
+	}
 
-			IntPtr moduleHandle;
+	/// <summary>
+	/// Populate data from <see cref="MetadataLocator.MetadataTableInfo"/>
+	/// </summary>
+	/// <param name="table"></param>
+	/// <exception cref="ArgumentNullException"></exception>
+	public MetadataTableInfo(MetadataLocator.MetadataTableInfo table) : base(table) {
+		if (table is null)
+			throw new ArgumentNullException(nameof(table));
 
-			moduleHandle = Marshal.GetHINSTANCE(metadataInfo.Module);
-			if (!(metadataInfo.TableStream is null))
-				TableStream = new MetadataStreamInfo(metadataInfo.TableStream, moduleHandle);
-			if (!(metadataInfo.StringHeap is null))
-				StringHeap = new MetadataStreamInfo(metadataInfo.StringHeap, moduleHandle);
-			if (!(metadataInfo.UserStringHeap is null))
-				UserStringHeap = new MetadataStreamInfo(metadataInfo.UserStringHeap, moduleHandle);
-			if (!(metadataInfo.GuidHeap is null))
-				GuidHeap = new MetadataStreamInfo(metadataInfo.GuidHeap, moduleHandle);
-			if (!(metadataInfo.BlobHeap is null))
-				BlobHeap = new MetadataStreamInfo(metadataInfo.BlobHeap, moduleHandle);
-			PEInfo = new DotNetPEInfo(metadataInfo.PEInfo, moduleHandle);
-		}
+		IsCompressed = table.IsCompressed;
+		TableCount = table.TableCount;
+		RowSizes = table.RowSizes;
+	}
+}
+
+/// <summary>
+/// Metadata heap info (#Strings, #US, #GUID, #Blob)
+/// </summary>
+public sealed class MetadataHeapInfo : MetadataStreamInfo {
+	/// <summary>
+	/// Default constructor
+	/// </summary>
+	public MetadataHeapInfo() {
+	}
+
+	/// <summary>
+	/// Populate data from <see cref="MetadataLocator.MetadataTableInfo"/>
+	/// </summary>
+	/// <param name="heap"></param>
+	/// <exception cref="ArgumentNullException"></exception>
+	public MetadataHeapInfo(MetadataLocator.MetadataHeapInfo heap) : base(heap) {
+	}
+}
+
+/// <summary>
+/// Metadata info
+/// </summary>
+public sealed class MetadataInfo : ISerializable {
+	/// <summary>
+	/// Determine if current instance is invalid
+	/// </summary>
+	public bool IsInvalid => MetadataAddress == 0;
+
+	/// <summary>
+	/// Address of metadata
+	/// </summary>
+	public ulong MetadataAddress;
+
+	/// <summary>
+	/// Size of metadata
+	/// </summary>
+	/// <remarks>Currently return 0x1c if table stream is uncompressed (aka #-)</remarks>
+	public uint MetadataSize;
+
+	/// <summary>
+	/// Metadata schema
+	/// </summary>
+	public MetadataSchema Schema = new();
+
+	/// <summary>
+	/// #~ or #- info
+	/// </summary>
+	public MetadataTableInfo TableStream = new();
+
+	/// <summary>
+	/// #Strings heap info
+	/// </summary>
+	public MetadataHeapInfo StringHeap = new();
+
+	/// <summary>
+	/// #US heap info
+	/// </summary>
+	public MetadataHeapInfo UserStringHeap = new();
+
+	/// <summary>
+	/// #GUID heap info
+	/// </summary>
+	public MetadataHeapInfo GuidHeap = new();
+
+	/// <summary>
+	/// #Blob heap info
+	/// </summary>
+	public MetadataHeapInfo BlobHeap = new();
+
+	/// <summary>
+	/// Default constructor
+	/// </summary>
+	public MetadataInfo() {
+	}
+
+	/// <summary>
+	/// Populate data from <see cref="MetadataLocator.MetadataInfo"/>
+	/// </summary>
+	/// <param name="metadata"></param>
+	/// <exception cref="ArgumentNullException"></exception>
+	public MetadataInfo(MetadataLocator.MetadataInfo metadata) {
+		if (metadata is null)
+			throw new ArgumentNullException(nameof(metadata));
+
+		MetadataAddress = metadata.MetadataAddress;
+		MetadataSize = metadata.MetadataSize;
+		Schema = new MetadataSchema(metadata.Schema);
+		TableStream = new MetadataTableInfo(metadata.TableStream);
+		StringHeap = new MetadataHeapInfo(metadata.StringHeap);
+		UserStringHeap = new MetadataHeapInfo(metadata.UserStringHeap);
+		GuidHeap = new MetadataHeapInfo(metadata.GuidHeap);
+		BlobHeap = new MetadataHeapInfo(metadata.BlobHeap);
+	}
+
+	bool ISerializable.Serialize(Stream destination) {
+		return SimpleSerializer.Write(destination, this);
+	}
+
+	bool ISerializable.Deserialize(Stream source) {
+		return SimpleSerializer.Read(source, this);
 	}
 }

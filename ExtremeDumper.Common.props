@@ -1,0 +1,13 @@
+<Project>
+	<PropertyGroup>
+		<Title>ExtremeDumper</Title>
+		<Version>4.0.0.1</Version>
+		<Copyright>Copyright © 2018-2022 Wwh</Copyright>
+	</PropertyGroup>
+	<PropertyGroup>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<Nullable>enable</Nullable>
+		<LangVersion>10.0</LangVersion>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+	</PropertyGroup>
+</Project>

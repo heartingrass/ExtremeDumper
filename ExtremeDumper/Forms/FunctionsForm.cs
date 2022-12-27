@@ -1,54 +1,52 @@
 using System;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Resources;
 using System.Windows.Forms;
 using NativeSharp;
 
-namespace ExtremeDumper.Forms {
-	internal unsafe partial class FunctionsForm : Form {
-		private readonly NativeModule _module;
-		private readonly ResourceManager _resources = new ResourceManager(typeof(FunctionsForm));
+namespace ExtremeDumper.Forms;
 
-		public FunctionsForm(NativeModule module) {
-			if (module is null)
-				throw new ArgumentNullException(nameof(module));
+unsafe partial class FunctionsForm : Form {
+	readonly NativeProcess process;
+	readonly NativeModule module;
 
-			InitializeComponent();
-			_module = module;
-			Text = $"{_resources.GetString("StrExportFunctions")} {_module.Name}(0x{((IntPtr)_module.Handle).ToString(Cache.Is64BitProcess ? "X16" : "X8")})";
-			typeof(ListView).InvokeMember("DoubleBuffered", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.SetProperty, null, lvwFunctions, new object[] { true });
-			lvwFunctions.ListViewItemSorter = new ListViewItemSorter(lvwFunctions, new List<TypeCode> {
-				TypeCode.String,
-				TypeCode.UInt64,
-				TypeCode.Int16
-			}) {
-				AllowHexLeading = true
-			};
-			RefreshFunctionList();
+	public FunctionsForm(uint processId, nuint moduleHandle) {
+		InitializeComponent();
+		Utils.ScaleByDpi(this);
+		process = NativeProcess.Open(processId);
+		if (process.IsInvalid)
+			throw new InvalidOperationException();
+		module = process.UnsafeGetModule((void*)moduleHandle);
+		Text = TitleComposer.Compose(true, "Export Functions", module.Name, null);
+		Utils.EnableDoubleBuffer(lvwFunctions);
+		lvwFunctions.ListViewItemSorter = new ListViewItemSorter(lvwFunctions, new[] { TypeCode.String, TypeCode.UInt64, TypeCode.Int16 }) { AllowHexLeading = true };
+		RefreshFunctionList();
+	}
+
+	#region Events
+	void lvwFunctions_Resize(object sender, EventArgs e) {
+		lvwFunctions.AutoResizeColumns(true);
+	}
+
+	void mnuRefreshFunctionList_Click(object sender, EventArgs e) {
+		RefreshFunctionList();
+	}
+	#endregion
+
+	void RefreshFunctionList() {
+		lvwFunctions.Items.Clear();
+		foreach (var functionInfo in module.EnumerateFunctionInfos()) {
+			var listViewItem = new ListViewItem(functionInfo.Name);
+			listViewItem.SubItems.Add(Formatter.FormatHex((nuint)functionInfo.Address));
+			listViewItem.SubItems.Add(functionInfo.Ordinal.ToString());
+			lvwFunctions.Items.Add(listViewItem);
 		}
+		lvwFunctions.AutoResizeColumns(false);
+	}
 
-		#region Events
-		private void lvwFunctions_Resize(object sender, EventArgs e) {
-			lvwFunctions.AutoResizeColumns(true);
+	protected override void Dispose(bool disposing) {
+		if (disposing) {
+			components?.Dispose();
+			process.Dispose();
 		}
-
-		private void mnuRefreshFunctionList_Click(object sender, EventArgs e) {
-			RefreshFunctionList();
-		}
-		#endregion
-
-		private void RefreshFunctionList() {
-			lvwFunctions.Items.Clear();
-			foreach (ExportFunctionInfo functionInfo in _module.EnumerateFunctionInfos()) {
-				ListViewItem listViewItem;
-
-				listViewItem = new ListViewItem(functionInfo.Name);
-				listViewItem.SubItems.Add("0x" + ((IntPtr)functionInfo.Address).ToString(Cache.Is64BitProcess ? "X16" : "X8"));
-				listViewItem.SubItems.Add(functionInfo.Ordinal.ToString());
-				lvwFunctions.Items.Add(listViewItem);
-			}
-			lvwFunctions.AutoResizeColumns(false);
-		}
+		base.Dispose(disposing);
 	}
 }

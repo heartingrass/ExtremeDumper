@@ -1,61 +1,19 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
-  <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{DFFAB16F-40BE-46B2-AA4A-0FD49C1CCCAA}</ProjectGuid>
-    <OutputType>Library</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>ExtremeDumper.AntiAntiDump</RootNamespace>
-    <AssemblyName>ExtremeDumper.AntiAntiDump</AssemblyName>
-    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <Deterministic>true</Deterministic>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>..\bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <LangVersion>7.3</LangVersion>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>pdbonly</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>..\bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <LangVersion>7.3</LangVersion>
-  </PropertyGroup>
-  <ItemGroup>
-    <Compile Include="MetadataInfo.cs" />
-    <Compile Include="MetadataInfoService.cs" />
-    <Compile Include="Injection.cs" />
-    <Compile Include="InjectionOptions.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Serialization\XmlSerializer.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <Reference Include="System" />
-    <Reference Include="System.Runtime.Remoting" />
-    <Reference Include="System.XML" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\Libraries\MetadataLocator\MetadataLocator\MetadataLocator.csproj">
-      <Project>{aed69d77-8c7b-41ba-9967-ac9b522430f9}</Project>
-      <Name>MetadataLocator</Name>
-    </ProjectReference>
-    <ProjectReference Include="..\Libraries\NativeSharp\NativeSharp\NativeSharp.csproj">
-      <Project>{2cd47f09-b324-4b20-8c8b-38fc4a037e37}</Project>
-      <Name>NativeSharp</Name>
-    </ProjectReference>
-  </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net35</TargetFramework>
+	</PropertyGroup>
+	<Import Project="..\ExtremeDumper.Common.props" />
+	<ItemGroup>
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\Memory.cs" Link="MetadataLocator\Memory.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\MetadataImport.cs" Link="MetadataLocator\MetadataImport.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\MetadataInfo.cs" Link="MetadataLocator\MetadataInfo.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\MetadataInfoImpl.cs" Link="MetadataLocator\MetadataInfoImpl.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\PEInfo.cs" Link="MetadataLocator\PEInfo.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\PEInfoImpl.cs" Link="MetadataLocator\PEInfoImpl.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\ReflectionHelpers.cs" Link="MetadataLocator\ReflectionHelpers.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\RuntimeDefinitions.cs" Link="MetadataLocator\RuntimeDefinitions.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\RuntimeEnvironment.cs" Link="MetadataLocator\RuntimeEnvironment.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\TestAssemblyManager.cs" Link="MetadataLocator\TestAssemblyManager.cs" />
+		<Compile Include="..\Libraries\MetadataLocator\MetadataLocator\Utils.cs" Link="MetadataLocator\Utils.cs" />
+	</ItemGroup>
 </Project>
